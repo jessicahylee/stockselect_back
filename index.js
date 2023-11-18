@@ -3,14 +3,13 @@ const expressSession = require('express-session')
 const cors = require('cors')
 const helmet = require('helmet')
 const passport = require('passport')
+const GoogleStrategy = require('passport-google-oauth20').Strategy
 const knex = require('knex')(require('./knexfile.js'))
-
-// const GoogleStrategy = require('passport-google-oauth20')
-require('dotenv').config()
 
 const app = express()
 const PORT = process.env.PORT || 5050
 
+require('dotenv').config()
 
 app.use(express.json())
 
@@ -32,41 +31,57 @@ app.use(
     saveUninitialized: true,
   }),
 )
-
-
-
+app.use(passport.initialize())
 // const authRoutes = require('./routes/auth')
-
-const GoogleStrategy = require('passport-google-oauth20').Strategy
-
-
+app.use(passport.session())
 passport.use(
   new GoogleStrategy(
     {
       clientID: process.env.GOOGLE_CLIENT_ID,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET,
       callbackURL: process.env.GOOGLE_CALLBACK_URL,
+      scope: ['profile'],
     },
-    function verify(accessToken, refreshToken, profile, cb) {
-      // If e-mail in the profile exist in db then trhow an error returning the code
-      // cb -> return cb(error, null)
-
-      // client is not in db then create the client and token and return cb(null,{token:"this is where token goes"})
-      // console.log(cb)
-      return cb(null, profile)
+    function (_accessToken, _refreshToken, profile, done) {
+      console.log(profile)
+      knex('users')
+        .select('id')
+        .where({ google_id: profile.id })
+        .then((user) => {
+          if (user.length) {
+            // If user is found, pass the user object to serialize function
+            done(null, user[0])
+          } else {
+            // If user isn't found, we create a record
+            knex('users')
+              .insert({
+                google_id: profile.id,
+                avatar_url: profile._json.picture,
+                username: profile.displayName,
+              })
+              .then((userId) => {
+               console.log(userId)
+                done(null, { id: userId[0] })
+              })
+              .catch((err) => {
+                console.log('Error creating a user', err)
+              })
+          }
+        })
+        .catch((err) => {
+          console.log('Error fetching a user', err)
+        })
     },
   ),
 )
-app.get('/auth/google', passport.authenticate('google',{scope:["profile"]}))
-app.get('/auth/google/callback',passport.authenticate('google', {
-    // successRedirect: process.env.CLIENT_URL,
-    failureRedirect: `${process.env.CLIENT_URL}/auth-fail`,
-    session: false,
-  }),
-  (_req, res, done) => {
-    res.redirect(process.env.CLIENT_URL)
-    return done()
-  }, ) 
+
+passport.serializeUser(function (user, done) {
+  console.log('serializeUser (user object):', user)
+  done(null, user.id)
+})
+
+const authRoutes = require('./routes/auth')
+app.use('/auth', authRoutes)
 
 app.listen(PORT, () => {
   console.log(`🚀 Server listening on port ${5050}.`)
